@@ -318,7 +318,7 @@ playMode = 0, // 0 = sequential, 1 = random, 2 = pause animations
 displayMode = 0, // 0 = slideshow, 1 = clock, 2 = fx, 3 = chart
 displayModeMax = 1, // max display mode
 brightness = 4, // LED brightness
-brightnessMultiplier = 8, // DO NOT CHANGE THIS!
+brightnessMultiplier = 12, // DO NOT CHANGE THIS!
 cycleTimeSetting = 2, // time before next animation: 1=10 secs, 2=30 secs, 3=1 min... 8=infinity
 menuMode = 0, // 0 = brightness, 1 = play mode, 2 = cycle time
 clockAnimationLength = 5, // seconds to play clock animations
