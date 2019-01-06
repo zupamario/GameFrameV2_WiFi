@@ -78,7 +78,10 @@ extern uint8_t playMode;
 extern int currentEffect;
 extern int secondCounter;
 extern unsigned long baseTime;
+#if 0
 extern CRGB leds[NUM_LEDS];
+#endif
+CRGB leds[NUM_LEDS];
 extern int realRandom(int max);
 
 uint16_t numEffects = 14; // number of effects

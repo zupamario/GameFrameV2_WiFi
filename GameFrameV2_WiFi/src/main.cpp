@@ -12,27 +12,33 @@
 ****************************************************/
 #define firmwareVersion 20180216 // firmware version
 
-#pragma SPARK_NO_PREPROCESSOR
 #include "SdFat.h"
-#include "ds1307.h"
+//#include "ds1307.h"
+#include "RTClib.h"
 #include "FastLED.h"
 FASTLED_USING_NAMESPACE;
-#include "APA102Controller_WithBrightness.h"
+//#include "APA102Controller_WithBrightness.h"
+#include <NeoPixelBrightnessBus.h>
 #include "IRremote.h"
 #include "IniFileLite.h"
 #define WEBDUINO_FAVICON_DATA ""
 #define WEBDUINO_SERIAL_DEBUGGING 0
+#ifdef HAVE_WEB_SERVER
 #include "WebServerPM.h"
+#endif
 #include <math.h>
 #include "effects.h"
 #include "colorNameToRGB.h"
 #include "HttpClient.h"
+#include <WiFi.h>
+#include <EEPROM.h>
 
-SYSTEM_THREAD(ENABLED);
-SYSTEM_MODE(SEMI_AUTOMATIC);
+//SYSTEM_THREAD(ENABLED);
+//SYSTEM_MODE(SEMI_AUTOMATIC);
 //SerialLogHandler logHandler(LOG_LEVEL_ALL); // get WIFI debug prints
 
 // HTTP setup
+#ifdef HAVE_HTTP
 HttpClient http;
 
 // Headers currently need to be set at init, useful for API keys etc.
@@ -45,6 +51,7 @@ http_header_t headers[] = {
 
 http_request_t request;
 http_response_t response;
+#endif
 
 // function prototypes required by disabling the spark preprocessor
 void setCycleTime();
@@ -98,6 +105,7 @@ uint8_t getScreenIndex(byte x, byte y);
 boolean winCheck();
 void chdirFirework();
 void syncClock(boolean force);
+#ifdef HAVE_WEB_SERVER
 void indexCmd(WebServer &server, WebServer::ConnectionType type, char *, bool);
 void commandCmd(WebServer &server, WebServer::ConnectionType type, char *url_tail, bool tail_complete);
 void playCmd(WebServer &server, WebServer::ConnectionType type, char *url_tail, bool tail_complete);
@@ -105,13 +113,18 @@ void setCmd(WebServer &server, WebServer::ConnectionType type, char *url_tail, b
 void failureCmd(WebServer &server, WebServer::ConnectionType type, char *url_tail, bool tail_complete);
 void uploadCmd(WebServer & server, WebServer::ConnectionType type, char * url_tail, bool tail_complete);
 void helpCmd(WebServer &server, WebServer::ConnectionType type, char *url_tail, bool tail_complete);
+#endif
 void processWebServer();
 void WebServerLaunch();
+#ifdef HAVE_WEB_SERVER
 void readHTML(WebServer &server, const String& htmlfile);
+#endif
 uint16_t get_mime_type_from_filename(const char* filename);
 void toggleWebServerPriority();
 void webServerCylon();
-void listFiles(uint8_t flags, uint8_t indent);
+#ifdef HAVE_WEB_SERVER
+void listFiles(WebServer &server, uint8_t flags, uint8_t indent);
+#endif
 void webServerDisplayManager();
 void scrollAddress();
 void setClockFace(byte face);
@@ -148,11 +161,11 @@ void colorNameToRGB(String colorName, byte *r, byte *g, byte *b);
 void firmwareUpdate_handler(system_event_t event, int param, void* moredata);
 void clearEEPROM();
 void showCoindeskBTC();
-void drawChart(float arry[]);
+void drawChart(float* arry);
 void getChart(char chartFunction[], char chartSymbol[], char chartInterval[]);
 void refreshChart();
 void refreshChartLatest();
-void fill_gradient(CRGB top, CRGB bottom);
+void fill_gradient(RgbColor top, RgbColor bottom);
 void fastledshow();
 void fadeControl();
 
@@ -165,7 +178,7 @@ void fadeControl();
 // Primary SPI with DMA
 // SCK => A3, MISO => A4, MOSI => A5, SS => A2 (default)
 SdFat sd;
-const uint8_t SD_CS = SS;
+const uint8_t SD_CS = 21;
 #elif SPI_CONFIGURATION == 1
 // Secondary SPI with DMA
 // SCK => D4, MISO => D3, MOSI => D2, SS => D1
@@ -190,8 +203,10 @@ SdFile myFile; // set filesystem
 //IPAddress ftpServer( 192, 168, 1, 100 );  // Local network testing
 String ftpServer = "ftp.drivehq.com";
 char ftpFileName[13] = "mode_2.bmp"; // 8.3 format!
+#ifdef HAVE_WEB_SERVER
 TCPClient ftpClient;
 TCPClient ftpDClient;
+#endif
 char outBuf[128];
 char outCount;
 byte doFTP(char action[9]);
@@ -206,10 +221,12 @@ File fh;
 /* This creates an instance of the webserver.  By specifying a prefix
  * of "", all pages will be at the root of the server. */
 #define PREFIX ""
+#ifdef HAS_WEB_SERVER
 WebServer webserver(PREFIX, 80);
+#endif
 
 // IR setup
-const byte RECV_PIN = D6; // Formerly 4
+const byte RECV_PIN = A4; // Formerly 4
 IRrecv irrecv(RECV_PIN);
 decode_results results;
 char irCommand;
@@ -218,26 +235,32 @@ boolean understood = false;
 
 // LED setup
 boolean APANativeBrightness = false; // true = hardware, false = software
-#define DATA_PIN D2 // SmartMatrix D4 -> D2
-#define CLOCK_PIN D4 // SmartMatrix D5 -> D4
-#define NUM_LEDS 256
-#define LED_TYPE APA102
-#define COLOR_ORDER BGR
-APA102Controller_WithBrightness<DATA_PIN, CLOCK_PIN, COLOR_ORDER, DATA_RATE_MHZ(30)> ledController;
-CRGB leds[NUM_LEDS];
-CRGB leds_buf[NUM_LEDS];
+//#define DATA_PIN D2 // SmartMatrix D4 -> D2
+//#define CLOCK_PIN D4 // SmartMatrix D5 -> D4
+//#define NUM_LEDS 256
+//#define LED_TYPE APA102
+//#define COLOR_ORDER BGR
+//APA102Controller_WithBrightness<DATA_PIN, CLOCK_PIN, COLOR_ORDER, DATA_RATE_MHZ(30)> ledController;
+//RgbColor leds[NUM_LEDS];
+//RgbColor leds_buf[NUM_LEDS];
+
+#define DATA_PIN 33
+NeoPixelBrightnessBus<NeoGrbFeature, NeoEsp32I2s1800KbpsMethod> strip(NUM_LEDS, DATA_PIN);
+NeoGamma<NeoGammaTableMethod> colorGamma;
+
+RTC_DS3231 rtc;
 
 //Button setup
-#define buttonNextPin D5  // "Next" button SmartMatrix D2 -> D5
-#define buttonMenuPin D3  // "Menu" button
+#define buttonNextPin 25  // "Next" button SmartMatrix D2 -> D5
+#define buttonMenuPin 26  // "Menu" button
 
-#define STATUS_LED A7 // D7 for Photon LED, A7 for PCB
+#define STATUS_LED 13 // D7 for Photon LED, A7 for PCB
 
 //Enable verbose prints?
-const boolean debugMode = false;
+const boolean debugMode = true;
 
 //rtc
-RTC_DS1307 rtc;
+//RTC_DS1307 rtc;
 DateTime now;
 
 //Global variables
@@ -375,7 +398,7 @@ nextFolder[32], // dictated next animation
 currentDirectory[32], // store active folder when accessing web server
 chartSymbol[10] = "BTC"; // stock/coin
 
-CRGB secondHandColor = 0; // color grabbed from digits.bmp for second hand
+RgbColor secondHandColor = 0; // color grabbed from digits.bmp for second hand
 
 // globals for automatic brightness control
 struct abc {
@@ -396,7 +419,7 @@ Abc abc8 { -1, 0};
 Abc abc9 { -1, 0};
 
 // setup application watchdog to reboot if something freezes
-ApplicationWatchdog wd(60000, systemRecover);
+//ApplicationWatchdog wd(60000, systemRecover);
 
 /*
 EEPROM MAP
@@ -423,24 +446,32 @@ EEPROM MAP
 
 void systemRecover()
 {
+#ifdef HAS_PARTICLE
   Particle.publish("systemStatus","recover");
+
   Serial.print("Crash! Read phase: ");
   Serial.println(readPhase);
 
   System.reset();
+#endif
 }
 
 void firmwareUpdate_handler(system_event_t event, int param, void* moredata)
 {
+  #ifdef HAS_PARTICLE
   if (param==firmware_update_failed)
   {
     firmwareUpdateReady = false;
     flashBox(255, 0, 0);
   }
   else firmwareUpdateReady = true;
+  #else
+  firmwareUpdateReady = false;
+  #endif
 }
 
 void setup(void) {
+  #ifdef HAS_PARTICLE
   // register the cloud functions
   Particle.function("Command", cloudCommand);
   Particle.function("Next", cloudNext);
@@ -451,12 +482,13 @@ void setup(void) {
   Particle.function("Color", cloudColor);
 
   System.on(firmware_update, firmwareUpdate_handler);
+  #endif
 
   // debug LED setup
-  pinMode(STATUS_LED, OUTPUT);
-  digitalWrite(STATUS_LED, HIGH);
-  pinMode(D7, OUTPUT); // turn on Photon LED for debug
-  digitalWrite(D7, HIGH);
+  //pinMode(STATUS_LED, OUTPUT);
+  //digitalWrite(STATUS_LED, HIGH);
+  //pinMode(D7, OUTPUT); // turn on Photon LED for debug
+  //digitalWrite(D7, HIGH);
 
   pinMode(buttonNextPin, INPUT_PULLUP);    // button as input
   pinMode(buttonMenuPin, INPUT_PULLUP);    // button as input
@@ -464,19 +496,25 @@ void setup(void) {
   delay(5000);
   if (debugMode == true)
   {
-    Serial.begin(57600);
+    Serial.begin(115200);
     delay(2000);
     Serial.println("Hello there!");
+  }
+
+  if (!EEPROM.begin(256))
+  {
+    Serial.println("failed to initialise EEPROM"); delay(1000000);
   }
 
   // IR enable
   irrecv.enableIRIn();
 
+  Serial.println("LED init!");
   // LED Init
-  FastLED.addLeds((CLEDController*) &ledController, leds, NUM_LEDS).setDither(0);
+  strip.Begin();
   stripSetBrightness();
   clearStripBuffer();
-  fastledshow();
+  strip.Show();
 
   // run burn in test if both tactile buttons held on cold boot
   if ((digitalRead(buttonNextPin) == LOW) && (digitalRead(buttonMenuPin) == LOW))
@@ -503,7 +541,7 @@ void setup(void) {
 
   // SD Init
   Serial.print("Init SD: ");
-  if (!sd.begin(SD_CS, SPI_HALF_SPEED)) {
+  if (!sd.begin(SD_CS, SD_SCK_MHZ(10))) {
     Serial.println("fail");
     // SD error message
     sdErrorMessage(0, 255, 0);
@@ -516,18 +554,23 @@ void setup(void) {
   // load automatic brightness control settings
   readABC();
 
-  FastLED.setCorrection(colorCorrection);
-  FastLED.setTemperature(colorTemperature);
+  //FastLED.setCorrection(colorCorrection);
+  //FastLED.setTemperature(colorTemperature);
 
   // read wifi .INI and connect to network
+  #if HAS_WEB_SERVER
   networkConnect();
+  #endif
   if (!wifiFolderFound)
   {
     // flash orange box
     flashBox(255, 165, 0);
   }
-
+#ifdef HAS_PARTICLE
   if (Particle.connected())
+#else
+  if (false)
+#endif
   {
     // get time zone
     EEPROM.get(6, timeZone);
@@ -541,13 +584,20 @@ void setup(void) {
   }
   else
   {
-    Wire.begin();
-    rtc.begin();
-    now = rtc.now();
-    if (!rtc.isrunning()) {
-      Serial.println("RTC is NOT running!");
-      rtc.adjust(DateTime(2016, 1, 1, 12, 0, 0)); // year, month, day, hour, min, sec
+    if (! rtc.begin()) {
+      Serial.println("Couldn't find RTC");
+      while (1);
     }
+
+    if (rtc.lostPower()) {
+      Serial.println("RTC lost power, lets set the time!");
+      // following line sets the RTC to the date & time this sketch was compiled
+      rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+      clockSet = true;
+      EEPROM.write(4, 1);
+      EEPROM.commit();
+    }
+    now = rtc.now();
   }
 
   // enable effects?
@@ -563,6 +613,7 @@ void setup(void) {
   }
 
   // force download new files
+#ifdef HAS_PARTICLE
   boolean forceDownload = true;
   if (Particle.connected() && forceDownload)
   {
@@ -610,6 +661,7 @@ void setup(void) {
       sd.chdir("/");
     }
   }
+#endif
 
   byte output = 0;
 
@@ -654,19 +706,20 @@ void setup(void) {
 
   // Init stuff
   initGameFrame();
-
+#ifdef HAS_PARTICLE
   if (Particle.connected())
   {
     Particle.publish("systemStatus","boot");
   }
-  digitalWrite(D7, LOW); // turn off Photon LED
+#endif
+  //digitalWrite(D7, LOW); // turn off Photon LED
 }
 
 void setTimeZone()
 {
   if (timeZone >= -12 || timeZone <= 13)
   {
-    Time.zone(timeZone);
+    //Time.zone(timeZone);
   }
 }
 
@@ -724,7 +777,7 @@ void initGameFrame()
         Serial.println(F("---"));
         if (displayFolderCount == true)
         {
-          leds[numFolders] = CRGB(128, 255, 0);
+          strip.SetPixelColor(numFolders, RgbColor(128, 255, 0));
           fastledshow();
         }
         numFolders++;
@@ -748,7 +801,11 @@ void initGameFrame()
   }
 
   // sync clock with RTC if offline
+  #ifdef HAS_PARTICLE
   if (!Particle.connected()) syncClock(true);
+  #else
+  if (true) syncClock(true);
+  #endif
 
   // check for reboot recovery from off state
   uint8_t powerState;
@@ -800,23 +857,11 @@ void applyCurrentABC()
 
 void stripSetBrightness()
 {
+  Serial.print("Setting brightness to ");
+  Serial.println(brightness);
   if (brightness > 7) brightness = 7;
   else if (brightness < 0) brightness = 0;
-
-  // APA102 native brightness
-  if (APANativeBrightness)
-  {
-    ledController.setAPA102Brightness(brightness);
-    FastLED.setBrightness(255);
-  }
-
-  // FastLED brightness
-  else FastLED.setBrightness(brightness * brightnessMultiplier);
-  if (brightness == 0)
-  {
-    clearStripBuffer();
-    fastledshow();
-  }
+  strip.SetBrightness(brightness * brightnessMultiplier);
 }
 
 void remoteTest()
@@ -830,7 +875,9 @@ void remoteTest()
   long nextIRCheck = 0;
   while (true)
   {
+  #ifdef HAS_PARTICLE
     Particle.process();
+  #endif
     irReceiver();
     if (irCommand == 'P' || irCommand == 'M' || irCommand == 'N' || irPowerRepeat || irMenuRepeat || irNextRepeat)
     {
@@ -877,7 +924,7 @@ void flashBox(uint8_t r, uint8_t g, uint8_t b)
 {
   for (int i=0; i<8; i++)
   {
-    drawBox(r, g, g);
+    drawBox(r, g, b);
     delay(75);
     drawBox(0, 0, 0);
     delay(75);
@@ -889,19 +936,19 @@ void drawBox(uint8_t r, uint8_t g, uint8_t b)
 {
   for (int i = 0; i < 15; i++)
   {
-    leds[i] = CRGB(r, g, b);
+    strip.SetPixelColor(i, RgbColor(r, g, b));
   }
   for (int i = 0; i < 16; i++)
   {
-    leds[getIndex(16, i)] = CRGB(r, g, b);
+    strip.SetPixelColor(getIndex(16, i), RgbColor(r, g, b));
   }
   for (int i = 0; i < 15; i++)
   {
-    leds[getIndex(i, 15)] = CRGB(r, g, b);
+    strip.SetPixelColor(getIndex(i, 15), RgbColor(r, g, b));
   }
   for (int i = 15; i > 0; i--)
   {
-    leds[getIndex(0, i)] = CRGB(r, g, b);
+    strip.SetPixelColor(getIndex(0, i), RgbColor(r, g, b));
   }
   fastledshow();
 }
@@ -994,7 +1041,7 @@ void testScreen()
   // white
   for (int i = 0; i < 256; i++)
   {
-    leds[i] = CRGB(255, 255, 255);
+    strip.SetPixelColor(i, RgbColor(255, 255, 255));
   }
   fastledshow();
   delay(5000);
@@ -1002,7 +1049,7 @@ void testScreen()
   // red
   for (int i = 0; i < 256; i++)
   {
-    leds[i] = CRGB(255, 0, 0);
+    strip.SetPixelColor(i, RgbColor(255, 0, 0));
   }
   fastledshow();
   delay(1000);
@@ -1010,7 +1057,7 @@ void testScreen()
   // green
   for (int i = 0; i < 256; i++)
   {
-    leds[i] = CRGB(0, 255, 0);
+    strip.SetPixelColor(i, RgbColor(0, 255, 0));
   }
   fastledshow();
   delay(1000);
@@ -1018,7 +1065,7 @@ void testScreen()
   // blue
   for (int i = 0; i < 256; i++)
   {
-    leds[i] = CRGB(0, 0, 255);
+    strip.SetPixelColor(i, RgbColor(0, 0, 255));
   }
   fastledshow();
   delay(1000);
@@ -1029,15 +1076,15 @@ void sdErrorMessage(uint8_t r, uint8_t g, uint8_t b)
   // red bars
   for (int index = 64; index < 80; index++)
   {
-    leds[index] = CRGB(r, g, b);
+    strip.SetPixelColor(index, RgbColor(r, g, b));
   }
   for (int index = 80; index < 192; index++)
   {
-    leds[index] = CRGB(0, 0, 0);
+    strip.SetPixelColor(index, RgbColor(0, 0, 0));
   }
   for (int index = 192; index < 208; index++)
   {
-    leds[index] = CRGB(r, g, b);
+    strip.SetPixelColor(index, RgbColor(r, g, b));
   }
   // S
   yellowDot(7, 6);
@@ -1066,6 +1113,7 @@ void sdErrorMessage(uint8_t r, uint8_t g, uint8_t b)
   stripSetBrightness();
   fastledshow();
 
+#if 0
   while (true)
   {
     for (int i = 255; i >= 0; i--)
@@ -1085,11 +1133,12 @@ void sdErrorMessage(uint8_t r, uint8_t g, uint8_t b)
     digitalWrite(STATUS_LED, HIGH);
     delay(500);*/
   }
+#endif
 }
 
 void yellowDot(byte x, byte y)
 {
-  leds[getIndex(x, y)] = CRGB(255, 255, 0);
+  strip.SetPixelColor(getIndex(x, y), RgbColor(255, 255, 0));
 }
 
 void setCycleTime()
@@ -1144,10 +1193,11 @@ void statusLedFlicker()
 void saveSettingsToEEPROM()
 {
   // save any new settings to EEPROM
-  EEPROM.update(0, brightness);
-  EEPROM.update(1, playMode);
-  EEPROM.update(2, cycleTimeSetting);
-  EEPROM.update(3, displayMode);
+  EEPROM.write(0, brightness);
+  EEPROM.write(1, playMode);
+  EEPROM.write(2, cycleTimeSetting);
+  EEPROM.write(3, displayMode);
+  EEPROM.commit();
 }
 
 void irReceiver()
@@ -1207,7 +1257,10 @@ void powerControl()
   if (firmwareUpdateReady)
   {
     // draw WIFI graphic
-    if (!framePowered) EEPROM.update(201, 255); // store power on state
+    if (!framePowered) {
+      EEPROM.write(201, 255); // store power on state
+      EEPROM.commit();
+    }
     closeMyFile();
     offsetX = 0;
     offsetY = 0;
@@ -1218,7 +1271,9 @@ void powerControl()
     while(firmwareUpdateReady)
     {
       // update and chill
+      #ifdef HAS_PARTICLE
       Particle.process();
+      #endif
     }
   }
   if (irCommand == 'P')
@@ -1243,7 +1298,8 @@ void powerControl()
       // power restored
       else
       {
-        EEPROM.update(201, 255); // store power state
+        EEPROM.write(201, 255); // store power state
+        EEPROM.commit();
         initGameFrame();
       }
     }
@@ -1276,14 +1332,17 @@ void framePowerDown()
     breakout = false;
     ballMoving = false;
   }
-  EEPROM.update(201, 128); // store power down state
+  EEPROM.write(201, 128); // store power down state
+  EEPROM.commit();
   clearStripBuffer();
   fastledshow();
 }
 
 void loop() {
   irReceiver();
+  #if HAS_WEB_SERVER
   processWebServer();
+  #endif
   powerControl();
   getCurrentTime();
   syncClock(false);
@@ -1450,10 +1509,10 @@ void mainLoop()
         ballIndex = 216;
         holdTime = 0;
         fileIndex = 0;
-        leds[ballIndex] = CRGB(175, 255, 15);
-        leds[paddleIndex] = CRGB(200, 200, 200);
-        leds[paddleIndex + 1] = CRGB(200, 200, 200);
-        leds[paddleIndex + 2] = CRGB(200, 200, 200);
+        strip.SetPixelColor(ballIndex, RgbColor(175, 255, 15));
+        strip.SetPixelColor(paddleIndex, RgbColor(200, 200, 200));
+        strip.SetPixelColor(paddleIndex + 1, RgbColor(200, 200, 200));
+        strip.SetPixelColor(paddleIndex + 2, RgbColor(200, 200, 200));
         fastledshow();
         return;
       }
@@ -1463,7 +1522,11 @@ void mainLoop()
   // reset clock
   if ((digitalRead(buttonNextPin) == LOW || irCommand == 'N') && buttonPressed == false && buttonEnabled == true && clockShown)
   {
+    #ifdef HAS_PARTICLE
     if (Particle.connected())
+    #else
+    if (false)
+    #endif
     {
       buttonPressed = true;
       syncClock(true);
@@ -1682,7 +1745,9 @@ void mainLoop()
               // Refresh right-most column every minute
               if (cycleTimeSetting >= 4)
               {
+                #if HAS_WEB_SERVER
                 refreshChartLatest();
+                #endif
                 drawChart(chartValues);
               }
             }
@@ -1863,7 +1928,7 @@ void nextImage()
       myFile.getName(folder, 13);
 
       // ignore system folders that start with "00"
-      if (myFile.isDir() && folder[0] != 48 && folder[1] != 48) {
+      if (myFile.isDir() && folder[0] != 48 && folder[1] != 48 && folder[0] != '.') {
         foundNewFolder = true;
         Serial.print(F("Folder Index: "));
         Serial.println(folderIndex);
@@ -2310,43 +2375,43 @@ void bmpDraw(char *filename, int x, int y) {
             r = sdbuffer[buffidx++];
 
             // apply contrast
-            r = dim8_jer(r);
-            g = dim8_jer(g);
-            b = dim8_jer(b);
+            //r = dim8_jer(r);
+            //g = dim8_jer(g);
+            //b = dim8_jer(b);
 
             // offsetY is beyond bmpHeight
             if (row >= bmpHeight - offsetY)
             {
               // black pixel
-              leds[getIndex(col, row)] = CRGB(0, 0, 0);
+              strip.SetPixelColor(getIndex(col, row), RgbColor(0, 0, 0));
             }
             // offsetY is negative
             else if (row < offsetY * -1)
             {
               // black pixel
-              leds[getIndex(col, row)] = CRGB(0, 0, 0);
+              strip.SetPixelColor(getIndex(col, row), RgbColor(0, 0, 0));
             }
             // offserX is beyond bmpWidth
             else if (col >= bmpWidth + offsetX)
             {
               // black pixel
-              leds[getIndex(col, row)] = CRGB(0, 0, 0);
+              strip.SetPixelColor(getIndex(col, row), RgbColor(0, 0, 0));
             }
             // offsetX is positive
             else if (col < offsetX)
             {
               // black pixel
-              leds[getIndex(col, row)] = CRGB(0, 0, 0);
+              strip.SetPixelColor(getIndex(col, row), RgbColor(0, 0, 0));
             }
             // print area is out of bounds
             else if (col + x < 0)
             {
-              leds[getIndex(col, row)] = CRGB(0, 0, 0);
+              strip.SetPixelColor(getIndex(col, row), RgbColor(0, 0, 0));
             }
             // all good
             else
             {
-              leds[getIndex(col + x, row)] = CRGB(r, g, b);
+              strip.SetPixelColor(getIndex(col + x, row),  colorGamma.Correct(RgbColor(r, g, b)));
             }
             // paint pixel color
           } // end pixel
@@ -2384,9 +2449,9 @@ byte getIndex(byte x, byte y)
   byte index;
   if (y == 0)
   {
-    index = x;
+    index = 15 - x;
   }
-  else if (y % 2 == 0)
+  else if (y % 2 == 1)
   {
     index = y * 16 + x;
   }
@@ -2401,7 +2466,7 @@ void clearStripBuffer()
 {
   for (int i = 0; i < 256; i++)
   {
-    leds[i] = CRGB(0, 0, 0);
+    strip.SetPixelColor(i, RgbColor(0, 0, 0));
   }
 }
 
@@ -2614,13 +2679,19 @@ void adjustClock()
 // sync clock once a day
 void syncClock(boolean force)
 {
+  #ifdef HAS_PARTICLE
   if (Particle.connected())
+  #else
+  if (false)
+  #endif
   {
     if (millis() - lastSync > RTC_SYNC_TIME || force)
     {
       // Request time synchronization from the Particle Cloud
       Serial.print("Syncing Internet Time...");
+      #ifdef HAS_PARTICLE
       Particle.syncTime();
+      #endif
       Serial.println("Done!");
       lastSync = millis();
     }
@@ -2631,7 +2702,7 @@ void syncClock(boolean force)
     {
       Serial.print("Syncing DS3231 Time...");
       now = rtc.now();
-      Time.setTime(now.unixtime());
+      //Time.setTime(now.unixtime());
       Serial.print("Done! (");
       Serial.print(now.unixtime());
       Serial.println(")");
@@ -2642,9 +2713,10 @@ void syncClock(boolean force)
 
 void getCurrentTime()
 {
-  currentSecond = Time.second();
-  currentMinute = Time.minute();
-  currentHour = Time.hour();
+  DateTime theTime = rtc.now();
+  currentSecond = theTime.second();
+  currentMinute = theTime.minute();
+  currentHour = theTime.hour();
 }
 
 void showClock()
@@ -2689,7 +2761,7 @@ void showClock()
         sd.chdir("/");
       }
       secondCounter = 0;
-      currentSecond = Time.second();
+      getCurrentTime();
       clockAnimationActive = true;
       clockShown = false;
       closeMyFile();
@@ -2722,7 +2794,7 @@ void storeSecondHandColor()
   offsetX = 0;
   offsetY = 176;
   bmpDraw(clockFace, 0, 0);
-  secondHandColor = leds[getIndex(secondHandX, secondHandY)];
+  secondHandColor = strip.GetPixelColor(getIndex(secondHandX, secondHandY));
 }
 
 void setClockFace(byte face)
@@ -2732,7 +2804,10 @@ void setClockFace(byte face)
   itoa(face, tickTock, 10);
   strcat(clockFace, tickTock);
   strcat(clockFace, ".bmp");
-  if (sd.exists(clockFace)) EEPROM.update(5, face);
+  if (sd.exists(clockFace)) {
+    EEPROM.write(5, face);
+    EEPROM.commit();
+  }
 }
 
 void clockDigit_1()
@@ -2835,7 +2910,7 @@ void getSecondHandIndex()
 void secondHand()
 {
   getSecondHandIndex();
-  leds[getIndex(secondHandX, secondHandY)] = secondHandColor;
+  strip.SetPixelColor(getIndex(secondHandX, secondHandY), secondHandColor);
 }
 
 // .INI file support
@@ -3222,10 +3297,11 @@ void APANativeBrightnessCheck()
 void clearEEPROM()
 {
   Serial.println("Clearing EEPROM...");
-  EEPROM.clear();
+  //EEPROM.clear();
   Serial.println("Done!");
 }
 
+#ifdef HAS_WEB_SERVER
 void networkConnect()
 {
 
@@ -3441,10 +3517,11 @@ void networkConnect()
       {
         if (useIniWifi)
         {
-          EEPROM.update(130, i0);
-          EEPROM.update(131, i1);
-          EEPROM.update(132, i2);
-          EEPROM.update(133, i3);
+          EEPROM.write(130, i0);
+          EEPROM.write(131, i1);
+          EEPROM.write(132, i2);
+          EEPROM.write(133, i3);
+          EEPROM.commit();
           newStaticIP = true;
         }
       }
@@ -3480,10 +3557,11 @@ void networkConnect()
       {
         if (useIniWifi)
         {
-          EEPROM.update(134, i0);
-          EEPROM.update(135, i1);
-          EEPROM.update(136, i2);
-          EEPROM.update(137, i3);
+          EEPROM.write(134, i0);
+          EEPROM.write(135, i1);
+          EEPROM.write(136, i2);
+          EEPROM.write(137, i3);
+          EEPROM.commit();
           newStaticIP = true;
         }
       }
@@ -3519,10 +3597,11 @@ void networkConnect()
       {
         if (useIniWifi)
         {
-          EEPROM.update(138, i0);
-          EEPROM.update(139, i1);
-          EEPROM.update(140, i2);
-          EEPROM.update(141, i3);
+          EEPROM.write(138, i0);
+          EEPROM.write(139, i1);
+          EEPROM.write(140, i2);
+          EEPROM.write(141, i3);
+          EEPROM.commit();
           newStaticIP = true;
         }
       }
@@ -3558,10 +3637,11 @@ void networkConnect()
       {
         if (useIniWifi)
         {
-          EEPROM.update(142, i0);
-          EEPROM.update(143, i1);
-          EEPROM.update(144, i2);
-          EEPROM.update(145, i3);
+          EEPROM.write(142, i0);
+          EEPROM.write(143, i1);
+          EEPROM.write(144, i2);
+          EEPROM.write(145, i3);
+          EEPROM.commit();
           newStaticIP = true;
         }
       }
@@ -3775,6 +3855,7 @@ void networkConnect()
   Serial.print("free memory: ");
   Serial.println(freemem);
 }
+#endif
 
 // Auto Brightness Control
 void readABC()
@@ -4169,7 +4250,7 @@ int realRandom(int max)
   if (0 == max) {
     return 0;
   }
-  return HAL_RNG_GetRandomNumber() % max;
+  return random(0, max);
 }
 
 int realRandom(int min, int max)
@@ -4177,16 +4258,16 @@ int realRandom(int min, int max)
   if (min >= max) {
     return min;
   }
-  return realRandom(max - min) + min;
+  return random(min, max);
 }
 
 // breakout code
 
 void drawPaddle()
 {
-  leds[paddleIndex] = CRGB(200, 200, 200);
-  leds[paddleIndex + 1] = CRGB(200, 200, 200);
-  leds[paddleIndex + 2] = CRGB(200, 200, 200);
+  strip.SetPixelColor(paddleIndex, RgbColor(200, 200, 200));
+  strip.SetPixelColor(paddleIndex + 1, RgbColor(200, 200, 200));
+  strip.SetPixelColor(paddleIndex + 2, RgbColor(200, 200, 200));
   fastledshow();
 }
 
@@ -4204,7 +4285,7 @@ void breakoutLoop()
   if ((digitalRead(buttonNextPin) == LOW || irCommand == 'N' || irNextRepeat == true) && holdTime == 0 && paddleIndex < 237 && gameInitialized == true && buttonEnabled == true)
   {
     paddleIndex++;
-    leds[paddleIndex - 1] = CRGB(0, 0, 0);
+    strip.SetPixelColor(paddleIndex - 1, RgbColor(0, 0, 0));
     drawPaddle();
     // paddle speed
     holdTime = 100;
@@ -4222,7 +4303,7 @@ void breakoutLoop()
   else if ((digitalRead(buttonMenuPin) == LOW || irCommand == 'M' || irMenuRepeat == true) && holdTime == 0 && paddleIndex > 224 && buttonEnabled == true)
   {
     paddleIndex--;
-    leds[paddleIndex + 3] = CRGB(0, 0, 0);
+    strip.SetPixelColor(paddleIndex + 3, RgbColor(0, 0, 0));
     drawPaddle();
     // paddle speed
     holdTime = 100;
@@ -4242,7 +4323,7 @@ void breakoutLoop()
   if (ballMoving == true && fileIndex == 0)
   {
     fileIndex = swapTime;
-    leds[ballIndex] = CRGB(0, 0, 0);
+    strip.SetPixelColor(ballIndex, RgbColor(0, 0, 0));
 
     // did the player lose?
     if (ballIndex >= 239)
@@ -4269,7 +4350,7 @@ void breakoutLoop()
           {
             b = c;
           }
-          leds[i] = CRGB(r, g, b);
+          strip.SetPixelColor(i, RgbColor(r, g, b));
         }
         fastledshow();
         delay(50);
@@ -4316,13 +4397,13 @@ void breakoutLoop()
           ballAngle = random8(190, 245);
         }
         ballIndex = getScreenIndex(ballX, ballY);
-        leds[paddleIndex] = CRGB(200, 200, 200);
-        leds[paddleIndex + 1] = CRGB(200, 200, 200);
-        leds[paddleIndex + 2] = CRGB(200, 200, 200);
+        strip.SetPixelColor(paddleIndex, RgbColor(200, 200, 200));
+        strip.SetPixelColor(paddleIndex + 1, RgbColor(200, 200, 200));
+        strip.SetPixelColor(paddleIndex + 2, RgbColor(200, 200, 200));
       }
 
       // brick hit?
-      if (leds[ballIndex].r > 0 || leds[ballIndex].g > 0 || leds[ballIndex].b > 0)
+      if (strip.GetPixelColor(ballIndex).R > 0 || strip.GetPixelColor(ballIndex).G > 0 || strip.GetPixelColor(ballIndex).B > 0)
       {
         // speed up and change direction
         if (enableWifi) swapTime -= 5;
@@ -4334,7 +4415,7 @@ void breakoutLoop()
           Serial.println("Win!!!");
           for (byte flashes=0; flashes < 30; flashes++)
           {
-            leds[ballIndex] = CRGB(random8(), random8(), random8());
+            strip.SetPixelColor(ballIndex, RgbColor(random8(), random8(), random8()));
             fastledshow();
             delay(50);
           }
@@ -4355,7 +4436,7 @@ void breakoutLoop()
       // check for preceeding win
       if (breakout == true)
       {
-        leds[ballIndex] = CRGB(175, 255, 15);
+        strip.SetPixelColor(ballIndex, RgbColor(175, 255, 15));
         fastledshow();
       }
     }
@@ -4374,7 +4455,7 @@ boolean winCheck()
   byte numberOfLitPixels = 0;
   for (byte i = 0; i < 255; i++)
   {
-    if (leds[i].r > 0 || leds[i].b > 0 || leds[i].g > 0)
+    if (strip.GetPixelColor(i).R > 0 || strip.GetPixelColor(i).B > 0 || strip.GetPixelColor(i).G > 0)
     {
       numberOfLitPixels++;
     }
@@ -4492,6 +4573,7 @@ void print2digits(int number) {
 // WebServer stuff
 
 // Modified LS function from SDFAT lib to print to webserver
+#ifdef HAS_WEB_SERVER
 void listFiles(WebServer &server, uint8_t flags, uint8_t indent) {
   char indexDirectory[33] = "/00system/wifi/";
 //  sd.vwd()->getName(indexDirectory, 32);
@@ -4543,7 +4625,9 @@ void listFiles(WebServer &server, uint8_t flags, uint8_t indent) {
     myFile.seekSet(indexPosition);
   }
 }
+#endif
 
+#ifdef HAS_WEB_SERVER
 // playCmd has no effect in clock mode
 void playCmd(WebServer &server, WebServer::ConnectionType type, char *url_tail, bool tail_complete)
 {
@@ -4582,7 +4666,9 @@ void playCmd(WebServer &server, WebServer::ConnectionType type, char *url_tail, 
   }
   else server.httpNoContent();
 }
+#endif
 
+#ifdef HAS_WEB_SERVER
 // control Game Frame settings directly
 void setCmd(WebServer &server, WebServer::ConnectionType type, char *url_tail, bool tail_complete)
 {
@@ -4729,6 +4815,7 @@ void setCmd(WebServer &server, WebServer::ConnectionType type, char *url_tail, b
     sd.chdir(currentDirectory);
   }
 }
+#endif
 
 void webServerCylon()
 {
@@ -4736,7 +4823,7 @@ void webServerCylon()
   {
     for (int i = 208; i < 224; i++)
     {
-      leds[i].fadeToBlackBy(12); // trippy cylon trail
+      //strip.SetPixelColor(i].fadeToBlackBy(12); // trippy cylon trail
     }
     cylonSineValue++;
     byte cylonLED = 209 + (scale8(sin8(cylonSineValue), 14));
@@ -4746,12 +4833,13 @@ void webServerCylon()
       cylonHUE += 1;
     }
     // cylonHUE += random(255); // enable for crazy colors
-    leds[cylonLED].setHue(cylonHUE).fadeToBlackBy(128);
+    //strip.SetPixelColor(cylonLED].setHue(cylonHUE).fadeToBlackBy(128);
     fastledshow();
     cylonTime = millis() + 10;
   }
 }
 
+#ifdef HAS_WEB_SERVER
 void commandCmd(WebServer &server, WebServer::ConnectionType type, char *url_tail, bool tail_complete)
 {
   if (type == WebServer::POST)
@@ -4963,7 +5051,9 @@ void commandCmd(WebServer &server, WebServer::ConnectionType type, char *url_tai
   }
   else server.httpNoContent();
 }
+#endif
 
+#ifdef HAS_WEB_SERVER
 void indexCmd(WebServer &server, WebServer::ConnectionType type, char *, bool)
 {
 
@@ -4986,7 +5076,9 @@ void indexCmd(WebServer &server, WebServer::ConnectionType type, char *, bool)
     resumeGalleryState();
   }
 }
+#endif
 
+#ifdef HAVE_WEB_SERVER
 void helpCmd(WebServer &server, WebServer::ConnectionType type, char *url_tail, bool tail_complete)
 {
 
@@ -5187,7 +5279,9 @@ void helpCmd(WebServer &server, WebServer::ConnectionType type, char *url_tail, 
 
   resumeGalleryState();
 }
+#endif
 
+#ifdef HAS_WEB_SERVER
 void readHTML(WebServer &server, const String& htmlfile)
 {
   Serial.print("Opening HTML file....");
@@ -5322,6 +5416,7 @@ void readHTML(WebServer &server, const String& htmlfile)
   }
   else Serial.println("Failed!");
 }
+#endif
 
 //=============================================================================================================================
 // utilities for mime types, in order to provide correct file type info to web browser
@@ -5371,6 +5466,7 @@ uint16_t get_mime_type_from_filename(const char* filename) {
   return r;
 }
 
+#ifdef HAS_WEB_SERVER
 void failureCmd(WebServer &server, WebServer::ConnectionType type, char *url_tail, bool tail_complete)
 {
   /* if we're handling a GET or POST, we can output our data here.
@@ -5428,7 +5524,9 @@ void failureCmd(WebServer &server, WebServer::ConnectionType type, char *url_tai
 
   resumeGalleryState();
 }
+#endif
 
+#ifdef HAS_WEB_SERVER
 void uploadCmd(WebServer & server, WebServer::ConnectionType type, char * url_tail, bool tail_complete)
 {
   storeGalleryState();
@@ -5516,7 +5614,9 @@ void uploadCmd(WebServer & server, WebServer::ConnectionType type, char * url_ta
   }
   resumeGalleryState();
 }
+#endif
 
+#ifdef HAS_WEB_SERVER
 void WebServerLaunch()
 {
   /* setup our default command that will be run when the user accesses
@@ -5535,7 +5635,9 @@ void WebServerLaunch()
   /* start the webserver */
   webserver.begin();
 }
+#endif
 
+#ifdef HAS_WEB_SERVER
 void processWebServer()
 {
   if (Particle.connected())
@@ -5550,6 +5652,7 @@ void processWebServer()
     /*webServerCylon();*/
   }
 }
+#endif
 
 void storeGalleryState()
 {
@@ -5744,8 +5847,8 @@ void webServerDisplayManager()
     // desaturate screen if animations paused
     for (int i = 0; i < 256; i++)
     {
-      uint8_t luma = leds[i].getLuma();
-      leds[i] = CRGB(luma, luma, luma);
+      uint8_t luma = strip.SetPixelColor(i].getLuma();
+      strip.SetPixelColor(i, RgbColor(luma, luma, luma);
     }
     */
     fastledshow();
@@ -5809,7 +5912,7 @@ void scrollAddress()
 }
 
 // Cloud
-
+#ifdef HAS_WEB_SERVER
 // One function to rule them all
 int cloudCommand(String c)
 {
@@ -6035,6 +6138,7 @@ int cloudCommand(String c)
 
   return 0;
 }
+#endif
 
 int cloudNext(String c)
 {
@@ -6062,7 +6166,7 @@ int cloudBrightness(String c)
   Serial.println(c);
   if (framePowered)
   {
-    if (strchr(c, '%'))
+    if (strchr(c.c_str(), '%'))
     {
       Serial.println("Percentage detected.");
       char percentageString[5];
@@ -6083,7 +6187,8 @@ int cloudBrightness(String c)
         newBright = 7.0f * multiplier;
         brightness = round(newBright);
         if (brightness < 1) brightness = 1;
-        ledController.setAPA102Brightness(brightness);
+        stripSetBrightness();
+        //ledController.setAPA102Brightness(brightness);
       }
     }
     // Do NOT use this.
@@ -6105,7 +6210,7 @@ int cloudBrightness(String c)
     }*/
     else
     {
-      brightness = atoi(c);
+      brightness = atoi(c.c_str());
       stripSetBrightness();
       saveSettingsToEEPROM();
     }
@@ -6129,7 +6234,8 @@ int cloudPower(String c)
     }
     else if (!framePowered)
     {
-      EEPROM.update(201, 255); // store power state
+      EEPROM.write(201, 255); // store power state
+      EEPROM.commit();
       initGameFrame();
       framePowered = true;
     }
@@ -6161,7 +6267,7 @@ int cloudPlayFolder(String c)
     {
       // verify chaining folders disabled
       chainIndex = -1;
-      strcpy_P(nextFolder, c);
+      strcpy_P(nextFolder, c.c_str());
       nextImage();
       drawFrame();
     }
@@ -6169,7 +6275,7 @@ int cloudPlayFolder(String c)
     {
       // verify chaining folders disabled
       chainIndex = -1;
-      strcpy_P(nextFolder, c);
+      strcpy_P(nextFolder, c.c_str());
     }
   }
   else return 0;
@@ -6181,11 +6287,11 @@ int cloudAlert(String c)
   Serial.println(c);
   if (framePowered && brightness > 0 && alertPhase != 1)
   {
-    if (c[0] == '/') strcpy(nextFolder, c);
+    if (c[0] == '/') strcpy(nextFolder, c.c_str());
     else
     {
       strcpy(nextFolder, "/");
-      strcat(nextFolder, c);
+      strcat(nextFolder, c.c_str());
     }
 
     // flash
@@ -6194,7 +6300,7 @@ int cloudAlert(String c)
       // color
       for (int i = 0; i < 256; i++)
       {
-        leds[i] = CRGB(255, 255, 0);
+        strip.SetPixelColor(i, RgbColor(255, 255, 0));
       }
       fastledshow();
       delay(50);
@@ -6224,7 +6330,7 @@ int cloudAlert(String c)
         offsetX = 0;
         offsetY = 0;
         secondCounter = 0;
-        currentSecond = Time.second();
+        getCurrentTime();
         clockAnimationActive = true;
         clockShown = false;
         closeMyFile();
@@ -6254,6 +6360,8 @@ int cloudColor(String c)
     // verify chaining folders disabled
     chainIndex = -1;
     byte r, g, b;
+    String lower = c;
+    lower.toLowerCase();
 
     if (isDigit(c[0]) || c[0] == '#')
     {
@@ -6269,7 +6377,7 @@ int cloudColor(String c)
     }
 
     // random color
-    else if (c.toLowerCase() == "random")
+    else if (lower == "random")
     {
       r = random8();
       g = random8();
@@ -6277,7 +6385,7 @@ int cloudColor(String c)
     }
 
     // off; eventually want to make this return to previous animation
-    else if (c.toLowerCase() == "off")
+    else if (lower == "off")
     {
       r = 0;
       g = 0;
@@ -6293,7 +6401,7 @@ int cloudColor(String c)
     }
     else if (displayMode == 1)
     {
-      currentSecond = Time.second();
+      getCurrentTime();
       clockAnimationActive = true;
   //    clockShown = false;
   //    closeMyFile();
@@ -6308,7 +6416,7 @@ int cloudColor(String c)
     b = dim8_jer(b);
 
     // rainbow unicorns exist
-    if (c.toLowerCase() == "rainbow")
+    if (lower == "rainbow")
     {
       uint8_t rainbowPixel = 0;
       uint8_t rainbowHue = 0;
@@ -6318,7 +6426,7 @@ int cloudColor(String c)
         // each column
         for (uint8_t c=0; c<16; c++)
         {
-          leds[rainbowPixel++] = CHSV(rainbowHue, 255, 255);
+          strip.SetPixelColor(rainbowPixel++, HslColor(rainbowHue, 255, 255));
         }
         rainbowHue += 16;
       }
@@ -6330,7 +6438,7 @@ int cloudColor(String c)
       // send the color data
       for (int i = 0; i < 256; i++)
       {
-        leds[i] = CRGB(r, g, b);
+        strip.SetPixelColor(i, RgbColor(r, g, b));
       }
       fastledshow();
     }
@@ -6339,7 +6447,7 @@ int cloudColor(String c)
 }
 
 // ftp
-
+#if HAS_PARTICLE
 void downloadIndex()
 {
   if (Particle.connected())
@@ -6360,7 +6468,9 @@ void downloadIndex()
     resumeGalleryState();
   }
 }
+#endif
 
+#if HAS_PARTICLE
 void downloadMode2()
 {
   if (Particle.connected())
@@ -6382,7 +6492,9 @@ void downloadMode2()
     resumeGalleryState();
   }
 }
+#endif
 
+#ifdef HAS_WEB_SERVER
 byte doFTP(char action[9])
 {
   if (action == "upload")
@@ -6537,7 +6649,9 @@ byte doFTP(char action[9])
   Serial.println("SD closed");
   return 1;
 }
+#endif
 
+#ifdef HAS_WEB_SERVER
 byte eRcv()
 {
   byte respCode;
@@ -6568,7 +6682,9 @@ byte eRcv()
 
   return 1;
 }
+#endif
 
+#ifdef HAS_WEB_SERVER
 void efail()
 {
   byte thisByte = 0;
@@ -6587,7 +6703,9 @@ void efail()
   fh.close();
   Serial.println("SD closed");
 }
+#endif
 
+#ifdef HAS_WEB_SERVER
 void showCoindeskBTC()
 {
   Serial.println("#HODL");
@@ -6645,7 +6763,9 @@ void showCoindeskBTC()
 
   drawChart(bitcoin);
 }
+#endif
 
+#ifdef HAS_WEB_SERVER
 void getChart(char chartFunction[], char chartSymbol[], char chartInterval[])
 {
   Serial.print("Get Chart: ");
@@ -6777,8 +6897,9 @@ void getChart(char chartFunction[], char chartSymbol[], char chartInterval[])
 
   drawChart(chartValues);
 }
+#endif
 
-void drawChart(float arry[])
+void drawChart(float* arry)
 {
   // expects a 17-float array
   // array should be in reverse chronological order
@@ -6789,11 +6910,11 @@ void drawChart(float arry[])
 
   for (int i=0; i<16; i++)
   {
-    arrayMin = min(arrayMin, arry[i]);
+    arrayMin = std::min(arrayMin, arry[i]);
   }
   for (int i=0; i<16; i++)
   {
-    arrayMax = max(arrayMax, arry[i]);
+    arrayMax = std::max(arrayMax, arry[i]);
   }
 
   clearStripBuffer();
@@ -6807,11 +6928,11 @@ void drawChart(float arry[])
       // map $USD to 0-15 (screen height)
       uint8_t y = map(arry[i], arrayMin, arrayMax, 0.0f, 15.0f);
       // color the peaks
-      leds[getIndex(15-i, 15-y)] = CRGB(255, 215, 0);
+      strip.SetPixelColor(getIndex(15-i, 15-y), RgbColor(255, 215, 0));
       // fill beneath
       for (int fill=y-1; fill>=0; --fill)
       {
-        leds[getIndex(15-i, 15-fill)] = CRGB(32, 48, 32);
+        strip.SetPixelColor(getIndex(15-i, 15-fill), RgbColor(32, 48, 32));
       }
     }
     fastledshow();
@@ -6820,8 +6941,8 @@ void drawChart(float arry[])
   // candle stick render (no wicks!)
   else if (chartStyle == 1)
   {
-    if (APANativeBrightness) fill_gradient(CRGB(0,0,8), CRGB(0,0,64));
-    else fill_gradient(CRGB(0,0,32), CRGB(0,0,64));
+    if (APANativeBrightness) fill_gradient(RgbColor(0,0,8), RgbColor(0,0,64));
+    else fill_gradient(RgbColor(0,0,32), RgbColor(0,0,64));
     // 17th entry is used to color first candlestick
     for (int i=0; i<16; i++)
     {
@@ -6836,7 +6957,7 @@ void drawChart(float arry[])
       {
          for (int candle = pY; candle <= y; candle++)
          {
-           leds[getIndex(15-i, 15-candle)] = CRGB(0, 255, 0);
+           strip.SetPixelColor(getIndex(15-i, 15-candle), RgbColor(0, 255, 0));
          }
       }
       // bear
@@ -6844,7 +6965,7 @@ void drawChart(float arry[])
       {
         for (int candle = pY; candle >= y; candle--)
         {
-          leds[getIndex(15-i, 15-candle)] = CRGB(255, 0, 0);
+          strip.SetPixelColor(getIndex(15-i, 15-candle), RgbColor(255, 0, 0));
         }
       }
     }
@@ -6873,9 +6994,12 @@ void refreshChart()
   else if (cycleTimeSetting == 5) strcpy(timeInterval, "15");
   else if (cycleTimeSetting == 6) strcpy(timeInterval, "30");
   else strcpy(timeInterval, "60");
+#ifdef HAS_WEB_SERVER
   getChart(chartFunction, chartSymbol, timeInterval);
+#endif
 }
 
+#ifdef HAS_WEB_SERVER
 void refreshChartLatest()
 {
   // Request path and body can be set at runtime or at setup.
@@ -6923,17 +7047,22 @@ void refreshChartLatest()
   Serial.print(" ");
   Serial.println(Time.timeStr());
 }
+#endif
 
-void fill_gradient(CRGB top, CRGB bottom)
+void fill_gradient(RgbColor top, RgbColor bottom)
 {
   int ledIndex = 0;
   for (int row=0; row<16; row++)
   {
     uint8_t amountOfBlend = map(row, 0, 16, 0, 255);
-    CRGB rowColor = blend(top, bottom, amountOfBlend);
+    #if 0
+    RgbColor rowColor = blend(top, bottom, amountOfBlend);
+    #else
+    RgbColor rowColor = top;
+    #endif
     for (int col=0; col<16; col++)
     {
-      leds[ledIndex] = rowColor;
+      strip.SetPixelColor(ledIndex, rowColor);
       ledIndex++;
     }
   }
@@ -6941,28 +7070,34 @@ void fill_gradient(CRGB top, CRGB bottom)
 
 void fastledshow()
 {
+  strip.Show();
+#if 0
   if (fadeStartTime + fadeLength > millis())
   {
     memmove( leds_buf, leds, NUM_LEDS * sizeof( CRGB) );
     uint8_t fadeAmount = map(millis(), fadeStartTime, fadeStartTime + fadeLength, 255, 0);
     for (int i = 0; i < NUM_LEDS; i++)
     {
-      leds[i].fadeToBlackBy(fadeAmount);
+      strip.SetPixelColor(i].fadeToBlackBy(fadeAmount);
     }
   }
   FastLED.show();
+#endif
 }
 
 void fadeControl()
 {
+  strip.Show();
+#if 0
   if (fadeStartTime + fadeLength > millis())
   {
     memmove( leds, leds_buf, NUM_LEDS * sizeof( CRGB) );
     uint8_t fadeAmount = map(millis(), fadeStartTime, fadeStartTime + fadeLength, 255, 0);
     for (int i = 0; i < NUM_LEDS; i++)
     {
-      leds[i].fadeToBlackBy(fadeAmount);
+      strip.SetPixelColor(i].fadeToBlackBy(fadeAmount);
     }
     FastLED.show();
   }
+#endif
 }
